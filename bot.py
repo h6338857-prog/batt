@@ -7,7 +7,6 @@ from datetime import datetime
 from threading import Thread
 
 from flask import Flask
-from discord import Client, Intents # اگر از کتابخانه دیسکورد استفاده می‌کردید، اما اینجا تلگرام است
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler, ConversationError
 import logging
