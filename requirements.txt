@@ -1,3 +1,5 @@
-python-telegram-bot
-motor
-flask
+    python-telegram-bot
+    motor
+    flask
+    nest_asyncio
+    dnspython
