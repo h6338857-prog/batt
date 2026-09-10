@@ -28,7 +28,7 @@ def run_flask():
 
 # ==================== تنظیمات ربات ====================
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "8598701713:AAHslvNMyv5DQ8J1p7mZ8haAOGef9QVRxB4") # توکن یا از محیط سیستم خوانده می‌شود یا اینجا ست کنید
-INITIAL_ADMIN_ID = int(os.environ.get("ADMIN_ID", "987654321")) # آیدی عددی ادمین اصلی
+INITIAL_ADMIN_ID = int(os.environ.get("ADMIN_ID", 987654321)) # آیدی عددی ادمین اصلی
 
 DB_FILE = "taf_bot_db.json"
 
