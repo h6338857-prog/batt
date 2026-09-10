@@ -1,5 +1,6 @@
-    python-telegram-bot
-    motor
-    flask
-    nest_asyncio
-    dnspython
+python-telegram-bot
+motor
+fastapi
+uvicorn
+nest_asyncio
+dnspython
