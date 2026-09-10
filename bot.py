@@ -360,7 +360,7 @@ def main():
     # اجرای وب سرور پورت 8080 روی یک Thread جداگانه جهت تأیید Render
     threading.Thread(target=run_flask, daemon=True).start()
 
-    app = ApplicationBuilder().token(8922278931:AAFx_kQn9RdNZ0nIerR2aqX0QbQjn4Zg6Js).build()
+    app = ApplicationBuilder().token("8922278931:AAFx_kQn9RdNZ0nIerR2aqX0QbQjn4Zg6Js").build()
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(admin_callback))
