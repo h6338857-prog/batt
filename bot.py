@@ -22,12 +22,10 @@ from telegram.ext import (
 # ==================== تنظیمات مستقیم و لاگ‌ها ====================
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 
-# اطلاعات قرار داده شده توسط کاربر
 BOT_TOKEN = "8949103823:AAHFzGSkqwY72yCLDZuDMBJacs8TBvirg-Q"
 ADMIN_ID = 7903625318
 DATABASE_URL = "postgresql://telegram_bot_db_7mx4_user:03C0t0vnZvGT5k9FmUqtx01L9HCW1Ng0@dpg-dahjf6u7bikc73eevhgg-a/telegram_bot_db_7mx4"
 
-# اصلاح احتمالی پروتکل postgres برای psycopg2
 if DATABASE_URL and DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
@@ -290,7 +288,11 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
                 [InlineKeyboardButton("📢 جوین در کانال", url=url)],
                 [InlineKeyboardButton("✅ جوین شدم", callback_data="check_join")]
             ])
-                await update.message.reply_text(f"⚠️ **برای دریافت سکه رایگان باید ابتدا در کانال زیر عضو شوید:**\n{ch}", reply_markup=kb, parse_mode="Markdown")
+            await update.message.reply_text(
+                f"⚠️ **برای دریافت سکه رایگان باید ابتدا در کانال زیر عضو شوید:**\n{ch}",
+                reply_markup=kb,
+                parse_mode="Markdown"
+            )
             return
 
         u = db.get_or_create_user(user.id)
@@ -336,11 +338,11 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         txt = "🏆 **جدول ۱۰ کاربر برتر بر اساس سکه:**\n\n"
         for idx, u in enumerate(top_users, 1):
             txt += f"{idx}. {u['first_name']} — 💰 **{u['coins']:,}** سکه\n"
-        await query.message.edit_text(txt, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data="main_menu")]), parse_mode="Markdown")
+        await query.message.edit_text(txt, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data="main_menu")]]), parse_mode="Markdown")
 
     elif data == "mini_games":
         kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("🎲 تاس شانس", callback_data="play_dice")],
+            [InlineKeyboardButton("🎲 تاس شانس", callback_data="play_dice_casino")],
             [InlineKeyboardButton("🪙 شیر یا خط", callback_data="play_coin_flip")],
             [InlineKeyboardButton("🔙 بازگشت", callback_data="main_menu")]
         ])
@@ -396,7 +398,7 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         taf_cost = u['taf_level'] * 100
         if db.upgrade_taf(user.id, taf_cost):
             await query.answer("✅ سطح تف شما با موفقیت ارتقا یافت!", show_alert=True)
-            await callback_router(update, context) # Refresh shop page
+            await callback_router(update, context)
         else:
             await query.answer("❌ سکه کافی ندارید!", show_alert=True)
 
@@ -447,7 +449,6 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         txt = f"🎲 **بازی تاس:**\n\n🎲 تاس شما: **{user_dice}**\n🎲 تاس ربات: **{bot_dice}**\n\n{res_txt}"
         await query.message.edit_text(txt, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔄 دوباره", callback_data="play_dice_casino"), InlineKeyboardButton("🔙 بازگشت", callback_data="casino")]]), parse_mode="Markdown")
 
-    # ========= دسترسی اختصاصی ادمین بدون هیچ تغییری =========
     elif data == "admin_main" and user.id == ADMIN_ID:
         await query.message.edit_text("👑 **پنل مدیریت ادمین:**", reply_markup=admin_kb(), parse_mode="Markdown")
 
@@ -527,12 +528,10 @@ def main():
     db = Database(DATABASE_URL)
     db.init_tables()
 
-    # وب سرور همزمان در ترپ مستقل
     threading.Thread(target=run_web_server, daemon=True).start()
 
     app = Application.builder().token(BOT_TOKEN).build()
 
-    # گفتگوی تنظیم کانال ادمین
     set_channel_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(admin_set_channel_start, pattern="^admin_set_channel_start$")],
         states={
@@ -544,7 +543,6 @@ def main():
         fallbacks=[CommandHandler("cancel", cancel_conv)]
     )
 
-    # گفتگوی اهدا سکه ادمین
     give_coin_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(admin_give_coins_start, pattern="^admin_give_coins$")],
         states={
@@ -565,3 +563,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+    
