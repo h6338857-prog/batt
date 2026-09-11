@@ -1,6 +1,6 @@
 """
 🤖 Telegram Advanced Game & Casino Bot
-Developed for Render Web Service (Anti-Sleep Integrated)
+Integrated Configs & Anti-Sleep Web Server
 Database: PostgreSQL
 """
 
@@ -19,12 +19,17 @@ from telegram.ext import (
     MessageHandler, ConversationHandler, filters, ContextTypes
 )
 
-# ==================== تنظیمات و لاگ‌ها ====================
+# ==================== تنظیمات مستقیم و لاگ‌ها ====================
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 
-BOT_TOKEN = os.getenv('8949103823:AAHFzGSkqwY72yCLDZuDMBJacs8TBvirg-Q')
-ADMIN_ID = int(os.getenv('7903625318', '0'))
-DATABASE_URL = os.getenv('postgresql://telegram_bot_db_7mx4_user:03C0t0vnZvGT5k9FmUqtx01L9HCW1Ng0@dpg-dahjf6u7bikc73eevhgg-a/telegram_bot_db_7mx4')
+# اطلاعات قرار داده شده توسط کاربر
+BOT_TOKEN = "8949103823:AAHFzGSkqwY72yCLDZuDMBJacs8TBvirg-Q"
+ADMIN_ID = 7903625318
+DATABASE_URL = "postgresql://telegram_bot_db_7mx4_user:03C0t0vnZvGT5k9FmUqtx01L9HCW1Ng0@dpg-dahjf6u7bikc73eevhgg-a/telegram_bot_db_7mx4"
+
+# اصلاح احتمالی پروتکل postgres برای psycopg2
+if DATABASE_URL and DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
 # استیت‌های گفتگو (Conversation States)
 (
@@ -69,6 +74,7 @@ class Database:
                 title VARCHAR(255) DEFAULT 'بدون لقب',
                 banned BOOLEAN DEFAULT FALSE,
                 last_active TIMESTAMP DEFAULT NOW(),
+                last_daily TIMESTAMP DEFAULT NULL,
                 created_at TIMESTAMP DEFAULT NOW()
             );
             """
@@ -81,9 +87,10 @@ class Database:
         defaults = {
             "mandatory_channel": "OFF",
             "bot_status": "on",
-            "welcome_msg": "سلام به ربات بازی و کازینو خوش آمدید!",
-            "rules_msg": "قوانین ربات:\n۱. احترام به کاربران\n۲. عدم استفاده از ابزارهای تقلب",
+            "welcome_msg": "سلام! به ربات پیشرفته بازی و کازینو خوش آمدید!",
+            "rules_msg": "قوانین ربات:\n۱. احترام به سایر کاربران\n۲. عدم استفاده از ابزارهای تقلب یا اسپم",
             "cost_slot": "10",
+            "cost_dice": "20",
             "cost_broadcast_perm": "50000"
         }
         for k, v in defaults.items():
@@ -140,6 +147,36 @@ class Database:
                     return True
                 return False
 
+    def upgrade_taf(self, user_id, cost):
+        if self.remove_coins(user_id, cost):
+            with self.get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("UPDATE users SET taf_level = taf_level + 1 WHERE user_id = %s", (user_id,))
+            return True
+        return False
+
+    def claim_daily(self, user_id):
+        u = self.get_or_create_user(user_id)
+        last_d = u['last_daily']
+        now = datetime.now()
+        if last_d and (now - last_d) < timedelta(hours=24):
+            remaining = timedelta(hours=24) - (now - last_d)
+            hours, remainder = divmod(remaining.seconds, 3600)
+            minutes, _ = divmod(remainder, 60)
+            return False, f"{hours} ساعت و {minutes} دقیقه"
+        
+        bonus = random.randint(100, 300)
+        with self.get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("UPDATE users SET coins = coins + %s, last_daily = NOW() WHERE user_id = %s", (bonus, user_id))
+        return True, bonus
+
+    def get_top_users(self, limit=10):
+        with self.get_conn() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute("SELECT first_name, coins FROM users ORDER BY coins DESC LIMIT %s", (limit,))
+                return cur.fetchall()
+
     def get_user_rank(self, user_id):
         with self.get_conn() as conn:
             with conn.cursor() as cur:
@@ -189,6 +226,7 @@ def main_kb(user_id):
     kb = [
         [InlineKeyboardButton("👤 پروفایل", callback_data="profile"), InlineKeyboardButton("🎰 کازینو", callback_data="casino")],
         [InlineKeyboardButton("🛍️ فروشگاه", callback_data="shop"), InlineKeyboardButton("🏆 لیدربورد", callback_data="leaderboard")],
+        [InlineKeyboardButton("🎁 پاداش روزانه", callback_data="daily_bonus"), InlineKeyboardButton("🎮 سرگرمی‌ها", callback_data="mini_games")],
         [InlineKeyboardButton("📜 راهنما", callback_data="help"), InlineKeyboardButton("📜 قوانین", callback_data="rules")]
     ]
     if user_id == ADMIN_ID:
@@ -221,7 +259,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"{welcome_msg}\n\nاز منوی زیر استفاده کنید:", reply_markup=main_kb(user.id))
 
 async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text
+    text = update.message.text.strip()
     user = update.effective_user
     
     if db.get_setting("bot_status") == "off" and user.id != ADMIN_ID:
@@ -229,16 +267,22 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
 
     db.inc_msg_count(user.id)
 
-    if text.strip() == "پروفایل":
+    if text == "پروفایل":
         u = db.get_or_create_user(user.id)
         rank = db.get_user_rank(user.id)
         level = get_user_level(u['coins'])
-        profile_text = f"👤 **پروفایل کاربری**\n───────────────\n🏷️ نام/لقب: **{u['title']}**\n💰 سکه‌ها: **{u['coins']:,}**\n🏅 سطح: **{level}**\n📊 تعداد پیام‌ها: **{u['msg_count']:,}**\n🏆 رتبه: **#{rank}**"
+        profile_text = (
+            f"👤 **پروفایل کاربری**\n───────────────\n"
+            f"🏷️ نام/لقب: **{u['first_name']}**\n"
+            f"💰 سکه‌ها: **{u['coins']:,}**\n"
+            f"🏅 سطح: **{level}**\n"
+            f"📊 تعداد پیام‌ها: **{u['msg_count']:,}**\n"
+            f"🏆 رتبه شما: **#{rank}**"
+        )
         await update.message.reply_text(profile_text, parse_mode="Markdown")
         return
 
     if "تف" in text:
-        # بررسی جوین اجباری فقط هنگام گرفتن سکه رایگان
         if not await check_channel_member(context, user.id):
             ch = db.get_setting("mandatory_channel")
             url = f"https://t.me/{ch.replace('@', '')}"
@@ -246,7 +290,7 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
                 [InlineKeyboardButton("📢 جوین در کانال", url=url)],
                 [InlineKeyboardButton("✅ جوین شدم", callback_data="check_join")]
             ])
-            await update.message.reply_text(f"⚠️ **برای دریافت سکه رایگان باید ابتدا در کانال زیر عضو شوید:**\n{ch}", reply_markup=kb, parse_mode="Markdown")
+                await update.message.reply_text(f"⚠️ **برای دریافت سکه رایگان باید ابتدا در کانال زیر عضو شوید:**\n{ch}", reply_markup=kb, parse_mode="Markdown")
             return
 
         u = db.get_or_create_user(user.id)
@@ -277,11 +321,57 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         u = db.get_or_create_user(user.id)
         rank = db.get_user_rank(user.id)
         level = get_user_level(u['coins'])
-        p_text = f"👤 **پروفایل شما**\n\n🏷️ لقب: {u['title']}\n💰 سکه‌ها: {u['coins']:,}\n🏅 سطح: {level}\n📊 پیام‌ها: {u['msg_count']}\n🏆 رتبه: #{rank}"
+        p_text = f"👤 **پروفایل شما**\n\n🏷️ نام: {u['first_name']}\n💰 سکه‌ها: {u['coins']:,}\n🏅 سطح: {level}\n📊 پیام‌ها: {u['msg_count']}\n🏆 رتبه: #{rank}"
         await query.message.edit_text(p_text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data="main_menu")]]))
 
+    elif data == "daily_bonus":
+        success, res = db.claim_daily(user.id)
+        if success:
+            await query.message.edit_text(f"🎁 **پاداش روزانه:**\n\nتبریک! شما **{res}** سکه پاداش دریافت کردید.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data="main_menu")]]))
+        else:
+            await query.message.edit_text(f"⏳ **پاداش روزانه:**\n\nشما قبلاً پاداش امروز را گرفته‌اید.\nزمان باقی‌مانده: **{res}**", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data="main_menu")]]))
+
+    elif data == "leaderboard":
+        top_users = db.get_top_users(10)
+        txt = "🏆 **جدول ۱۰ کاربر برتر بر اساس سکه:**\n\n"
+        for idx, u in enumerate(top_users, 1):
+            txt += f"{idx}. {u['first_name']} — 💰 **{u['coins']:,}** سکه\n"
+        await query.message.edit_text(txt, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data="main_menu")]), parse_mode="Markdown")
+
+    elif data == "mini_games":
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🎲 تاس شانس", callback_data="play_dice")],
+            [InlineKeyboardButton("🪙 شیر یا خط", callback_data="play_coin_flip")],
+            [InlineKeyboardButton("🔙 بازگشت", callback_data="main_menu")]
+        ])
+        await query.message.edit_text("🎮 **بخش بازی‌ها و سرگرمی:**", reply_markup=kb)
+
+    elif data == "play_coin_flip":
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🪙 شیر", callback_data="flip_head"), InlineKeyboardButton("🪙 خط", callback_data="flip_tail")],
+            [InlineKeyboardButton("🔙 بازگشت", callback_data="mini_games")]
+        ])
+        await query.message.edit_text("🎯 **پیش‌بینی کنید:** (هزینه هر بار: ۱۵ سکه)", reply_markup=kb)
+
+    elif data in ["flip_head", "flip_tail"]:
+        if not db.remove_coins(user.id, 15):
+            await query.answer("❌ سکه کافی ندارید! (هزینه: ۱۵ سکه)", show_alert=True)
+            return
+        
+        choice = "شیر" if data == "flip_head" else "خط"
+        outcome = random.choice(["شیر", "خط"])
+        won = (choice == outcome)
+        
+        if won:
+            db.add_coins(user.id, 30)
+            txt = f"🎉 سکه چرخید و روی **{outcome}** آمد!\nشما برنده **۳۰** سکه شدید!"
+        else:
+            txt = f"❌ سکه چرخید و روی **{outcome}** آمد!\nمتاسفانه باختید."
+            
+        await query.message.edit_text(txt, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔄 دوباره", callback_data="play_coin_flip"), InlineKeyboardButton("🔙 بازگشت", callback_data="mini_games")]]), parse_mode="Markdown")
+
     elif data == "help":
-        help_text = "📜 **راهنما:**\n\nارسال کلمه **تف** -> دریافت سکه رایگان\nارسال **پروفایل** -> مشاهده مشخصات شما"
+        help_text = "📜 **راهنمای ربات:**\n\n• ارسال کلمه **تف** -> دریافت سکه رایگان\n• ارسال کلمه **پروفایل** -> مشاهده آمار کاربر\n• **پاداش روزانه** -> دریافت سکه رایگان هر ۲۴ ساعت\n• **کازینو و بازی‌ها** -> شرط‌بندی و افزایش سکه‌ها"
         await query.message.edit_text(help_text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data="main_menu")]]))
 
     elif data == "rules":
@@ -301,10 +391,21 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ])
         await query.message.edit_text("🛍️ **به فروشگاه خوش آمدید!**", reply_markup=kb)
 
+    elif data == "upgrade_taf":
+        u = db.get_or_create_user(user.id)
+        taf_cost = u['taf_level'] * 100
+        if db.upgrade_taf(user.id, taf_cost):
+            await query.answer("✅ سطح تف شما با موفقیت ارتقا یافت!", show_alert=True)
+            await callback_router(update, context) # Refresh shop page
+        else:
+            await query.answer("❌ سکه کافی ندارید!", show_alert=True)
+
     elif data == "casino":
         c_slot = db.get_setting("cost_slot", "10")
+        c_dice = db.get_setting("cost_dice", "20")
         kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton(f"🎰 گردونه شانس ({c_slot} سکه)", callback_data="play_slot")],
+            [InlineKeyboardButton(f"🎰 اسلات ماشین ({c_slot} سکه)", callback_data="play_slot")],
+            [InlineKeyboardButton(f"🎲 تاس شانس ({c_dice} سکه)", callback_data="play_dice_casino")],
             [InlineKeyboardButton("🔙 بازگشت", callback_data="main_menu")]
         ])
         await query.message.edit_text("🎰 **به کازینو خوش آمدید!**", reply_markup=kb)
@@ -324,12 +425,35 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         txt = f"🎰 **گردونه چرخید:**\n\n{' | '.join(res)}\n\n" + (f"🎉 شما **{prize}** سکه برنده شدید!" if won else "❌ باختید.")
         await query.message.edit_text(txt, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔄 دوباره", callback_data="play_slot"), InlineKeyboardButton("🔙 بازگشت", callback_data="casino")]]))
 
+    elif data == "play_dice_casino":
+        cost = int(db.get_setting("cost_dice", "20"))
+        if not db.remove_coins(user.id, cost):
+            await query.answer("❌ سکه کافی ندارید!", show_alert=True)
+            return
+            
+        user_dice = random.randint(1, 6)
+        bot_dice = random.randint(1, 6)
+        
+        if user_dice > bot_dice:
+            prize = cost * 2
+            db.add_coins(user.id, prize)
+            res_txt = f"🎉 شما برنده شدید و **{prize}** سکه گرفتید!"
+        elif user_dice < bot_dice:
+            res_txt = "❌ شما باختید."
+        else:
+            db.add_coins(user.id, cost)
+            res_txt = "🤝 مساوی شدید! سکه شما بازگردانده شد."
+
+        txt = f"🎲 **بازی تاس:**\n\n🎲 تاس شما: **{user_dice}**\n🎲 تاس ربات: **{bot_dice}**\n\n{res_txt}"
+        await query.message.edit_text(txt, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔄 دوباره", callback_data="play_dice_casino"), InlineKeyboardButton("🔙 بازگشت", callback_data="casino")]]), parse_mode="Markdown")
+
+    # ========= دسترسی اختصاصی ادمین بدون هیچ تغییری =========
     elif data == "admin_main" and user.id == ADMIN_ID:
         await query.message.edit_text("👑 **پنل مدیریت ادمین:**", reply_markup=admin_kb(), parse_mode="Markdown")
 
     elif data == "admin_stats" and user.id == ADMIN_ID:
         st = db.get_stats()
-        txt = f"📊 **آمار:**\n\n👤 کاربران: **{st['total_users']:,}**\n💰 کل سکه‌ها: **{st['total_coins']:,}**"
+        txt = f"📊 **آمار:**\n\n👤 کاربران: **{st['total_users']:,}**\n💰 کل سکه‌ها: **{st['total_coins']:,}**\n🟢 فعال ۲۴ ساعت گذشته: **{st['daily']:,}**"
         await query.message.edit_text(txt, reply_markup=admin_kb(), parse_mode="Markdown")
 
     elif data == "admin_toggle_bot" and user.id == ADMIN_ID:
@@ -339,7 +463,7 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer(f"وضعیت ربات: {new_s}", show_alert=True)
         await query.message.edit_text("👑 **پنل مدیریت ادمین:**", reply_markup=admin_kb())
 
-# ============ ۶. گفتگوهای ادمین (افزودن کانال و اعطای سکه) ============
+# ============ ۶. گفتگوهای ادمین ============
 async def admin_set_channel_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     if q.from_user.id != ADMIN_ID: return ConversationHandler.END
@@ -368,21 +492,30 @@ async def admin_disable_channel(update: Update, context: ContextTypes.DEFAULT_TY
 
 async def admin_give_coins_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
+    if q.from_user.id != ADMIN_ID: return ConversationHandler.END
     await q.answer()
     await q.message.edit_text("🎁 شناسه عددی (User ID) کاربر را بفرستید:")
     return WAITING_ADMIN_GIVE_COIN_ID
 
 async def admin_give_coins_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data['target_user'] = int(update.message.text.strip())
-    await update.message.reply_text("💰 چه تعداد سکه می‌خواهید اعطا کنید؟:")
-    return WAITING_ADMIN_GIVE_COIN_AMT
+    try:
+        context.user_data['target_user'] = int(update.message.text.strip())
+        await update.message.reply_text("💰 چه تعداد سکه می‌خواهید اعطا کنید؟:")
+        return WAITING_ADMIN_GIVE_COIN_AMT
+    except ValueError:
+        await update.message.reply_text("❌ لطفاً یک شناسه عددی معتبر بفرستید:")
+        return WAITING_ADMIN_GIVE_COIN_ID
 
 async def admin_give_coins_amt(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    amt = int(update.message.text.strip())
-    uid = context.user_data['target_user']
-    db.add_coins(uid, amt)
-    await update.message.reply_text(f"✅ تعداد **{amt:,}** سکه به کاربر `{uid}` اعطا شد.", reply_markup=admin_kb(), parse_mode="Markdown")
-    return ConversationHandler.END
+    try:
+        amt = int(update.message.text.strip())
+        uid = context.user_data['target_user']
+        db.add_coins(uid, amt)
+        await update.message.reply_text(f"✅ تعداد **{amt:,}** سکه به کاربر `{uid}` اعطا شد.", reply_markup=admin_kb(), parse_mode="Markdown")
+        return ConversationHandler.END
+    except ValueError:
+        await update.message.reply_text("❌ لطفاً تعداد سکه را به صورت عدد بفرستید:")
+        return WAITING_ADMIN_GIVE_COIN_AMT
 
 async def cancel_conv(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("❌ عملیات لغو شد.")
@@ -391,17 +524,15 @@ async def cancel_conv(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ============ ۷. اجرای اصلی ============
 def main():
     global db
-    if not DATABASE_URL or not BOT_TOKEN:
-        raise ValueError("BOT_TOKEN یا DATABASE_URL ست نشده است!")
-
     db = Database(DATABASE_URL)
     db.init_tables()
 
+    # وب سرور همزمان در ترپ مستقل
     threading.Thread(target=run_web_server, daemon=True).start()
 
     app = Application.builder().token(BOT_TOKEN).build()
 
-    # گفتگوی تنظیم کانال
+    # گفتگوی تنظیم کانال ادمین
     set_channel_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(admin_set_channel_start, pattern="^admin_set_channel_start$")],
         states={
@@ -413,7 +544,7 @@ def main():
         fallbacks=[CommandHandler("cancel", cancel_conv)]
     )
 
-    # گفتگوی اهدا سکه
+    # گفتگوی اهدا سکه ادمین
     give_coin_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(admin_give_coins_start, pattern="^admin_give_coins$")],
         states={
